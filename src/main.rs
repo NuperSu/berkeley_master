@@ -2,40 +2,35 @@ mod slave_management;
 mod time_sync;
 
 use tokio::{net::UdpSocket, time::{sleep, Duration}};
-use std::{env, error::Error, sync::Arc, collections::HashMap};
-use slave_management::process_message;
+use std::{env, error::Error, sync::{Arc, Mutex}};
+use slave_management::SlaveNode;
 use time_sync::synchronize_time;
-use std::sync::Mutex;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mut args = env::args();
-    if args.len() < 2 {
-        println!("Usage: {} [Master Node Address]", args.next().unwrap());
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 3 {
+        println!("Usage: {} [Master Node Address] [Slave Node Addresses...]", args[0]);
         return Ok(());
     }
 
-    let master_address = args.nth(1).unwrap();
-    let socket = Arc::new(UdpSocket::bind(&master_address).await?);
-    let slave_nodes = Arc::new(Mutex::new(HashMap::new()));
+    let master_address = &args[1];
+    let slave_addresses = &args[2..];
+    println!("Master node starting. Binding to address: {}", master_address);
 
-    let slave_nodes_clone_for_messages = Arc::clone(&slave_nodes);
-    let socket_clone_for_messages = Arc::clone(&socket);
+    let socket = Arc::new(UdpSocket::bind(master_address).await?);
+    let slave_nodes = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
-    tokio::spawn(async move {
-        loop {
-            let mut buf = [0; 1024];
-            match socket_clone_for_messages.recv_from(&mut buf).await {
-                Ok((number_of_bytes, src_addr)) => {
-                    let msg = String::from_utf8_lossy(&buf[..number_of_bytes]);
-                    process_message(&msg, src_addr, &slave_nodes_clone_for_messages).await;
-                }
-                Err(e) => {
-                    eprintln!("Couldn't receive a datagram: {}", e);
-                }
-            }
+    // Initialize slave_nodes with provided slave addresses
+    {
+        let mut nodes = slave_nodes.lock().unwrap();
+        for addr in slave_addresses {
+            nodes.insert(addr.to_string(), SlaveNode {
+                address: addr.to_string(),
+                last_response: 0, // Initial timestamp could be 0 or current time
+            });
         }
-    });
+    }
 
     let slave_nodes_clone_for_sync = Arc::clone(&slave_nodes);
     let socket_clone_for_sync = Arc::clone(&socket);
@@ -43,6 +38,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::spawn(async move {
         loop {
             sleep(Duration::from_secs(10)).await; // Sync interval
+            println!("Initiating time synchronization process.");
             synchronize_time(&slave_nodes_clone_for_sync, &socket_clone_for_sync).await;
         }
     });

@@ -1,7 +1,9 @@
 use tokio::net::UdpSocket;
-use std::{sync::{Arc, Mutex}, collections::HashMap};
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 use serde_json::json;
 use chrono::Utc;
+use std::net::SocketAddr;
 use super::slave_management::SlaveNode;
 
 pub async fn synchronize_time(slave_nodes: &Arc<Mutex<HashMap<String, SlaveNode>>>, socket: &UdpSocket) {
@@ -33,8 +35,15 @@ pub async fn synchronize_time(slave_nodes: &Arc<Mutex<HashMap<String, SlaveNode>
             "adjustment": adjustment,
         }).to_string();
 
-        if let Err(e) = socket.send_to(&message.as_bytes(), &addr).await {
-            eprintln!("Error sending time adjustment to {}: {}", addr, e);
+        match addr.parse::<SocketAddr>() {
+            Ok(socket_addr) => {
+                if let Err(e) = socket.send_to(&message.as_bytes(), &socket_addr).await {
+                    eprintln!("Error sending time adjustment to {}: {}", addr, e);
+                } else {
+                    println!("Successfully sent time adjustment to {}: {}", addr, message);
+                }
+            },
+            Err(_) => eprintln!("Failed to parse address: {}", addr),
         }
     }
 }
