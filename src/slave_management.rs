@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 use chrono::Utc;
 use serde_json::Value;
 
@@ -16,14 +16,17 @@ pub async fn process_message(msg: &str, src_addr: SocketAddr, slave_nodes: &Arc<
     match parsed_msg["type"].as_str() {
         Some("time_report") => {
             let addr = src_addr.to_string();
-            nodes.entry(addr.clone()).or_insert_with(|| SlaveNode {
-                address: addr,
-                last_response: Utc::now().timestamp_millis(),
-            });
+            if !nodes.contains_key(&addr) {
+                nodes.insert(addr.clone(), SlaveNode {
+                    address: addr.clone(),
+                    last_response: Utc::now().timestamp_millis(),
+                });
+            }
+
             if let Some(node) = nodes.get_mut(&addr) {
                 node.last_response = Utc::now().timestamp_millis();
             }
-        },
+        }
         _ => eprintln!("Unknown message type received"),
     }
 }
