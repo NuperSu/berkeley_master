@@ -4,6 +4,7 @@ use serde_json::Result as JsonResult;
 use std::time::Duration;
 use crate::network::{send_message, receive_message};
 use std::collections::HashMap;
+use chrono::Utc;
 
 #[derive(Serialize, Deserialize)]
 struct TimeMessage {
@@ -55,7 +56,7 @@ impl MasterTimeSync {
 
         if !times.is_empty() {
             let average_time = times.values().sum::<i64>() / times.len() as i64;
-            let master_time = self.get_master_time().await;
+            let master_time = Utc::now().timestamp_millis();
             let adjustment = average_time - master_time;
 
             for addr in &self.slave_addresses {
@@ -68,9 +69,5 @@ impl MasterTimeSync {
         }
 
         Ok(())
-    }
-
-    async fn get_master_time(&self) -> i64 {
-        Utc::now().timestamp_millis()
     }
 }
