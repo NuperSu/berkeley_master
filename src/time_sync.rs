@@ -27,19 +27,25 @@ impl MasterTimeSync {
     pub async fn start_sync_process(&self) {
         loop {
             match self.sync_cycle().await {
-                Ok(_) => println!("Sync cycle completed successfully."),
+                Ok(synced) => {
+                    if synced {
+                        println!("Sync cycle completed successfully.");
+                    } else {
+                        eprintln!("Sync cycle completed: No slave responses received.");
+                    }
+                },
                 Err(e) => eprintln!("Sync cycle failed: {}", e),
             }
             tokio::time::sleep(Duration::from_secs(60)).await; // Sync interval
         }
     }
 
-    async fn sync_cycle(&self) -> JsonResult<()> {
+    async fn sync_cycle(&self) -> JsonResult<bool> {
         let mut times = HashMap::new();
         for addr in &self.slave_addresses {
-            send_message(&self.socket, &serde_json::to_string(&TimeMessage { 
-                msg_type: "request_time".to_string(), 
-                time: None, 
+            send_message(&self.socket, &serde_json::to_string(&TimeMessage {
+                msg_type: "request_time".to_string(),
+                time: None,
                 adjustment: None,
             })?, addr).await.expect("Failed to send time request");
 
@@ -54,20 +60,24 @@ impl MasterTimeSync {
             }
         }
 
-        if !times.is_empty() {
-            let average_time = times.values().sum::<i64>() / times.len() as i64;
-            let master_time = Utc::now().timestamp_millis();
-            let adjustment = average_time - master_time;
-
-            for addr in &self.slave_addresses {
-                send_message(&self.socket, &serde_json::to_string(&TimeMessage { 
-                    msg_type: "adjust_time".to_string(), 
-                    time: None, 
-                    adjustment: Some(adjustment),
-                })?, addr).await.expect("Failed to send time adjustment");
-            }
+        if times.is_empty() {
+            // Return Ok(false) to indicate no slaves responded
+            return Ok(false);
         }
 
-        Ok(())
+        let average_time = times.values().sum::<i64>() / times.len() as i64;
+        let master_time = Utc::now().timestamp_millis();
+        let adjustment = average_time - master_time;
+
+        for addr in &self.slave_addresses {
+            send_message(&self.socket, &serde_json::to_string(&TimeMessage {
+                msg_type: "adjust_time".to_string(),
+                time: None,
+                adjustment: Some(adjustment),
+            })?, addr).await.expect("Failed to send time adjustment");
+        }
+
+        // Return Ok(true) to indicate at least one slave responded and adjustments were sent
+        Ok(true)
     }
 }
