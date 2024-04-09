@@ -1,49 +1,32 @@
+use std::sync::Arc;
 use tokio::net::UdpSocket;
-use std::sync::{Arc, Mutex};
+use tokio::sync::Mutex;
 use std::collections::HashMap;
-use serde_json::json;
 use chrono::Utc;
-use std::net::SocketAddr;
-use super::slave_management::SlaveNode;
+use crate::slave_management::SlaveNode;
+use serde_json::{json, Value};
 
-pub async fn synchronize_time(slave_nodes: &Arc<Mutex<HashMap<String, SlaveNode>>>, socket: &UdpSocket) {
-    let adjustments = {
-        let nodes = slave_nodes.lock().unwrap();
-        let mut adjustments = Vec::new();
+pub async fn request_time_sync(socket: Arc<UdpSocket>, slave_nodes: Arc<Mutex<HashMap<String, SlaveNode>>>) {
+    let message = json!({
+        "type": "request_time"
+    }).to_string();
+
+    let mut nodes = slave_nodes.lock().await;
+    let current_time = Utc::now().timestamp_millis();
+    for node in nodes.values_mut() {
+        node.update_request_time(); // Update the time when we're sending the request
+        if let Err(e) = socket.send_to(&message.as_bytes(), &node.address).await {
+            eprintln!("Error sending time request to {}: {}", node.address, e);
+        }
+    }
+}
+
+pub async fn process_time_report(slave_nodes: Arc<Mutex<HashMap<String, SlaveNode>>>, addr: String, reported_time: i64) {
+    let mut nodes = slave_nodes.lock().await;
+    if let Some(node) = nodes.get_mut(&addr) {
         let current_time = Utc::now().timestamp_millis();
-        let mut total_offset = 0i64;
-        let mut count = 0i64;
-
-        for node in nodes.values() {
-            let node_time_offset = current_time - node.last_response;
-            total_offset += node_time_offset;
-            count += 1;
-        }
-
-        if count > 0 {
-            let average_offset = total_offset / count;
-            for (addr, _) in nodes.iter() {
-                adjustments.push((addr.clone(), average_offset));
-            }
-        }
-        adjustments
-    };
-
-    for (addr, adjustment) in adjustments {
-        let message = json!({
-            "type": "adjust_time",
-            "adjustment": adjustment,
-        }).to_string();
-
-        match addr.parse::<SocketAddr>() {
-            Ok(socket_addr) => {
-                if let Err(e) = socket.send_to(&message.as_bytes(), &socket_addr).await {
-                    eprintln!("Error sending time adjustment to {}: {}", addr, e);
-                } else {
-                    println!("Successfully sent time adjustment to {}: {}", addr, message);
-                }
-            },
-            Err(_) => eprintln!("Failed to parse address: {}", addr),
-        }
+        let rtt = current_time - node.request_time; // Calculate round-trip time
+        let estimated_slave_time = reported_time + (rtt / 2); // Estimate slave's time
+        // Here you can compare the estimated_slave_time with the master's time and decide whether an adjustment is needed
     }
 }
