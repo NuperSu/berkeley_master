@@ -42,6 +42,8 @@ impl MasterTimeSync {
 
     async fn sync_cycle(&self) -> JsonResult<bool> {
         let mut times = HashMap::new();
+        let master_time = Utc::now().timestamp_millis();
+
         for addr in &self.slave_addresses {
             send_message(&self.socket, &serde_json::to_string(&TimeMessage {
                 msg_type: "request_time".to_string(),
@@ -65,16 +67,15 @@ impl MasterTimeSync {
             return Ok(false);
         }
 
-        let average_time = times.values().sum::<i64>() / times.len() as i64;
-        let master_time = Utc::now().timestamp_millis();
-        let adjustment = average_time - master_time;
-
-        for addr in &self.slave_addresses {
-            send_message(&self.socket, &serde_json::to_string(&TimeMessage {
-                msg_type: "adjust_time".to_string(),
-                time: None,
-                adjustment: Some(adjustment),
-            })?, addr).await.expect("Failed to send time adjustment");
+        for (addr, slave_time) in times.iter() {
+            let adjustment = master_time - slave_time;
+            if adjustment != 0 {
+                send_message(&self.socket, &serde_json::to_string(&TimeMessage {
+                    msg_type: "adjust_time".to_string(),
+                    time: None,
+                    adjustment: Some(adjustment),
+                })?, addr).await.expect("Failed to send time adjustment");
+            }
         }
 
         // Return Ok(true) to indicate at least one slave responded and adjustments were sent
