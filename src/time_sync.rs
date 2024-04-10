@@ -33,7 +33,7 @@ impl MasterTimeSync {
                     } else {
                         eprintln!("Sync cycle completed: No slave responses received.");
                     }
-                }
+                },
                 Err(e) => eprintln!("Sync cycle failed: {}", e),
             }
             tokio::time::sleep(Duration::from_secs(60)).await; // Sync interval
@@ -43,7 +43,8 @@ impl MasterTimeSync {
     async fn sync_cycle(&self) -> JsonResult<bool> {
         let master_time = Utc::now().timestamp_millis();
         let mut times = HashMap::<String, i64>::new();
-        let mut latencies = HashMap::<String, i64>::new();
+        let mut total_offset = 0i64;
+        let mut valid_responses = 0i64;
 
         for addr in &self.slave_addresses {
             let send_time = Utc::now().timestamp_millis();
@@ -55,36 +56,41 @@ impl MasterTimeSync {
 
             if let Ok(msg) = receive_message(&self.socket, Duration::from_secs(5)).await {
                 let receive_time = Utc::now().timestamp_millis();
-                let latency = (receive_time - send_time) / 2; // Mid-point latency approximation
+                let latency = (receive_time - send_time) / 2;
 
                 if let Ok(parsed_msg) = serde_json::from_str::<TimeMessage>(&msg) {
                     if parsed_msg.msg_type == "time_report" {
                         if let Some(time) = parsed_msg.time {
-                            // Adjust slave time by the estimated latency to account for network delay
-                            times.insert(addr.clone(), time - latency);
-                            latencies.insert(addr.clone(), latency);
+                            let adjusted_slave_time = time - latency;
+                            let offset = master_time - adjusted_slave_time;
+                            times.insert(addr.clone(), adjusted_slave_time);
+                            total_offset += offset;
+                            valid_responses += 1;
                         }
                     }
                 }
             }
         }
 
-        if times.is_empty() {
-            return Ok(false); // No slaves responded
+        if valid_responses == 0 {
+            // Return Ok(false) to indicate no slaves responded
+            return Ok(false);
         }
 
-        for (addr, adjusted_slave_time) in times {
-            let slave_time_adjustment = master_time - adjusted_slave_time;
-            // Only send adjustment if it's significant enough considering network latency
-            if slave_time_adjustment.abs() > latencies[&addr] {
+        let average_offset = if valid_responses > 0 { total_offset / valid_responses } else { 0 };
+
+        for addr in &self.slave_addresses {
+            // Send the adjustment based on the average offset, but only if there's a significant difference
+            if average_offset.abs() > 0 {
                 send_message(&self.socket, &serde_json::to_string(&TimeMessage {
                     msg_type: "adjust_time".to_string(),
                     time: None,
-                    adjustment: Some(slave_time_adjustment),
+                    adjustment: Some(average_offset),
                 })?, &addr).await.expect("Failed to send time adjustment");
             }
         }
 
-        Ok(true) // At least one slave responded and adjustments were made
+        // Return Ok(true) to indicate at least one slave responded and adjustments were sent
+        Ok(true)
     }
 }
