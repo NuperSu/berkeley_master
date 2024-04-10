@@ -36,15 +36,17 @@ impl MasterTimeSync {
                 },
                 Err(e) => eprintln!("Sync cycle failed: {}", e),
             }
-            tokio::time::sleep(Duration::from_secs(60)).await; // Sync interval
+            tokio::time::sleep(Duration::from_secs(10)).await; // Sync interval
         }
     }
 
     async fn sync_cycle(&self) -> JsonResult<bool> {
-        let mut times = HashMap::new();
         let master_time = Utc::now().timestamp_millis();
+        let mut times = HashMap::<String, i64>::new();
+        let mut latencies = HashMap::<String, i64>::new();
 
         for addr in &self.slave_addresses {
+            let send_time = Utc::now().timestamp_millis();
             send_message(&self.socket, &serde_json::to_string(&TimeMessage {
                 msg_type: "request_time".to_string(),
                 time: None,
@@ -52,10 +54,15 @@ impl MasterTimeSync {
             })?, addr).await.expect("Failed to send time request");
 
             if let Ok(msg) = receive_message(&self.socket, Duration::from_secs(5)).await {
+                let receive_time = Utc::now().timestamp_millis();
+                let latency = (receive_time - send_time) / 2; // Mid-point latency approximation
+
                 if let Ok(parsed_msg) = serde_json::from_str::<TimeMessage>(&msg) {
                     if parsed_msg.msg_type == "time_report" {
                         if let Some(time) = parsed_msg.time {
-                            times.insert(addr.clone(), time);
+                            // Adjust slave time by the estimated latency to account for network delay
+                            times.insert(addr.clone(), time - latency);
+                            latencies.insert(addr.clone(), latency);
                         }
                     }
                 }
@@ -63,22 +70,21 @@ impl MasterTimeSync {
         }
 
         if times.is_empty() {
-            // Return Ok(false) to indicate no slaves responded
-            return Ok(false);
+            return Ok(false); // No slaves responded
         }
 
-        for (addr, slave_time) in times.iter() {
-            let adjustment = master_time - slave_time;
-            if adjustment != 0 {
+        for (addr, adjusted_slave_time) in times {
+            let slave_time_adjustment = master_time - adjusted_slave_time;
+            // Only send adjustment if it's significant enough considering network latency
+            if slave_time_adjustment.abs() > latencies[&addr] {
                 send_message(&self.socket, &serde_json::to_string(&TimeMessage {
                     msg_type: "adjust_time".to_string(),
                     time: None,
-                    adjustment: Some(adjustment),
-                })?, addr).await.expect("Failed to send time adjustment");
+                    adjustment: Some(slave_time_adjustment),
+                })?, &addr).await.expect("Failed to send time adjustment");
             }
         }
 
-        // Return Ok(true) to indicate at least one slave responded and adjustments were sent
-        Ok(true)
+        Ok(true) // At least one slave responded and adjustments were made
     }
 }
