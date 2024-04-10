@@ -33,10 +33,10 @@ impl MasterTimeSync {
                     } else {
                         eprintln!("Sync cycle completed: No slave responses received.");
                     }
-                },
+                }
                 Err(e) => eprintln!("Sync cycle failed: {}", e),
             }
-            tokio::time::sleep(Duration::from_secs(10)).await; // Sync interval
+            tokio::time::sleep(Duration::from_secs(60)).await; // Sync interval
         }
     }
 
